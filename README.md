@@ -31,12 +31,8 @@ A solução conecta tecnologia e cuidado humano, unindo **Deep Learning**, **arq
 | Camada | Tecnologia | Função |
 |:--------|:------------|:--------|
 | **Frontend Mobile** | React Native | Aplicativo utilizado por funcionários e gestores (login, histórico, notificações e estatísticas). |
-| **Backend 1 (.NET API)** | ASP.NET Core | Autenticação, cadastro de usuários, integração com banco SQL e registro de eventos. |
-| **Backend 2 (Java Service)** | Spring Boot | Comunicação com o módulo de IA (visão computacional) e integração entre serviços. |
-| **Banco de Dados** | PostgreSQL / SQL Server | Armazena dados de usuários, eventos e resultados de detecções. |
 | **Visão Computacional (IA)** | Python + OpenCV + YOLOv8 | Detecta automaticamente o uso de EPIs em imagens e vídeos. |
-| **Cloud / DevOps** | Azure / AWS + Docker + CI/CD | Hospedagem, pipelines automatizados e monitoramento contínuo. |
-| **QA (Quality Assurance)** | Postman, Jest, Selenium | Testes automatizados de API, mobile e interface administrativa. |
+
 
 ---
 
@@ -97,7 +93,7 @@ O dashboard exibe:
 
 ```bash
 # Clonar o repositório
-git clone https://github.com/SEU-USUARIO/safework-ia.git
+git clone https://github.com/C4zin/IoT_GS.git
 cd safework-ia
 
 # Instalar dependências
@@ -141,16 +137,6 @@ runtime.txt  →  python-3.10
 
 ---
 
-## 🏗️ Extensões Futuras  
-
-🔹 Integração com os backends Java e .NET via API REST.  
-🔹 Registro automático de eventos em banco SQL.  
-🔹 Envio de alertas push para o app mobile.  
-🔹 Relatório PDF de conformidade com gráficos e logotipo.  
-🔹 Treinamento customizado de modelo YOLO com dataset industrial.  
-
----
-
 ## 🎬 Apresentação e Demonstração  
 
 O vídeo de apresentação mostrará:
@@ -158,7 +144,7 @@ O vídeo de apresentação mostrará:
 2. Progresso de análise.  
 3. Dashboard gerado pela IA.  
 4. Download do vídeo analisado.  
-5. Explicação da integração com os demais módulos (mobile, backends e cloud).  
+5. Explicação da integração com os demais módulos (mobile,banco).  
 
 ---
 
@@ -175,33 +161,12 @@ O vídeo de apresentação mostrará:
 
 ---
 
-## 📸 Interface do Sistema  
-
-<p align="center">
-  <img src="docs/dashboard-preview.png" alt="Dashboard SafeWork" width="700">
-</p>
-
-> Exemplo de dashboard do módulo de IA mostrando análise de conformidade de EPIs.
-
----
-
-## 🧩 Arquitetura Visual Simplificada  
-
-<p align="center">
-  <img src="docs/arquitetura-safework.png" alt="Arquitetura SafeWork" width="700">
-</p>
-
-> Fluxo entre Mobile, APIs e módulo de IA em Python.
-
----
-
 ## 📚 Referências Técnicas  
 
 - [Ultralytics YOLOv8 Docs](https://docs.ultralytics.com)  
 - [Streamlit Documentation](https://docs.streamlit.io)  
 - [OpenCV Python Guide](https://docs.opencv.org)  
 - [Plotly Express](https://plotly.com/python/plotly-express/)  
-- [Azure DevOps Pipelines](https://learn.microsoft.com/en-us/azure/devops/pipelines/)  
 
 ---
 
