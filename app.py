@@ -8,7 +8,7 @@ from ultralytics import YOLO
 import plotly.express as px
 
 # ---------------- CONFIGURAÇÃO ----------------
-st.set_page_config(page_title="Analisador de EPI", page_icon="🦺", layout="wide")
+st.set_page_config(page_title="SafeWork - Projeto Global Solution", page_icon="🦺", layout="wide")
 
 # ---------------- CSS CUSTOM ----------------
 st.markdown("""
@@ -28,7 +28,13 @@ st.markdown("""
     }
 
     /* Cabeçalhos */
-    h1, h2, h3 {
+    h1 {
+        color: #b22222 !important;
+        font-weight: 800 !important;
+        text-transform: uppercase;
+        letter-spacing: 1px;
+    }
+    h2, h3 {
         color: #b22222 !important;
         font-weight: 700 !important;
         text-transform: uppercase;
@@ -54,10 +60,10 @@ st.markdown("""
         color: #e0e0e0 !important;
     }
 
-    /* Upload box */
+    /* Upload box - sem pontilhado */
     div[data-testid="stFileUploader"] {
         background-color: #1c1c1c !important;
-        border: 2px dashed #b22222 !important;
+        border: 2px solid #b22222 !important;
         border-radius: 10px !important;
         color: #d3d3d3 !important;
     }
@@ -69,13 +75,12 @@ st.markdown("""
     .stAlert div {
         color: #fff !important;
     }
-
     .stAlert[data-baseweb="alert"]:has(div[data-testid="stNotificationContentSuccess"]) {
         background-color: rgba(178, 34, 34, 0.2) !important;
         border-left: 5px solid #b22222 !important;
     }
 
-    /* Tabelas e gráficos */
+    /* Gráficos Plotly */
     .plotly {
         background-color: transparent !important;
     }
@@ -87,9 +92,9 @@ st.markdown("""
     </style>
 """, unsafe_allow_html=True)
 
-# ---------------- TÍTULO ----------------
-st.title("🦺 Analisador de Vídeo de EPI com IA")
-st.markdown("### Utilize inteligência artificial para verificar automaticamente o uso de EPIs em vídeos.")
+# ---------------- CABEÇALHO ----------------
+st.title("SafeWork - Projeto Global Solution")
+st.markdown("### Análise de Trabalhadores")
 st.markdown("---")
 
 # ---------------- UPLOAD ----------------
@@ -120,7 +125,6 @@ def analyze_video(input_path, output_path):
     out = cv2.VideoWriter(output_path, fourcc, fps, (width, height))
 
     progress = st.progress(0)
-
     counters = {"person": 0, "helmet": 0, "vest": 0, "mask": 0, "unknown": 0}
 
     for i in range(frame_count):
