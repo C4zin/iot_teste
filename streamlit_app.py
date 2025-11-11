@@ -1,383 +1,507 @@
 # streamlit_app.py
 import os
 import time
-import io
+import sys
+import glob
+import pickle
 import shutil
-import zipfile
-import urllib.request
-from pathlib import Path
-
-import streamlit as st
-import pandas as pd
+import importlib
+import subprocess
 import numpy as np
-import cv2
+import streamlit as st
 
-# ultralytics (YOLOv8)
-from ultralytics import YOLO
+# ============================================================
+# 🔧 Garantia de dependências (ajuda local/Colab).
+#    Em produção (Streamlit Cloud) use requirements.txt.
+# ============================================================
+def ensure(pkg, pip_name=None):
+    pip_name = pip_name or pkg
+    try:
+        importlib.import_module(pkg)
+    except Exception:
+        subprocess.check_call([sys.executable, "-m", "pip", "install", "-q", pip_name])
 
-# ---------------------------
-# Config
-# ---------------------------
-st.set_page_config(page_title="EPITrack Vision — All-in-one (improved)", layout="wide")
-BASE_DIR = Path(".").resolve()
-UPLOAD_DIR = BASE_DIR / "uploads"
-OUTPUT_VIDEO = BASE_DIR / "Analisado.mp4"
-OUTPUT_CSV = BASE_DIR / "results_epi.csv"
-THUMB_DIR = BASE_DIR / "thumbs_no_epi"
-MODEL_LOCAL = BASE_DIR / "yolov8n_epi.pt"
-
-# Candidate URLs (tries in order)
-MODEL_URLS = [
-    # known release that often exists
-    "https://github.com/ultralytics/yolov8/releases/download/v8.1.0/yolov8n-ppe.pt",
-    # fallback older assets
-    "https://github.com/ultralytics/assets/releases/download/v8.2.0/yolov8n-construction-ppe.pt",
-    # or an alternative name (keep as last resort)
-    "https://github.com/ultralytics/yolov8/releases/download/v8.2.0/yolov8n-ppe.pt",
-]
-
-# UI styling (small)
-st.markdown(
+def ensure_cv2_headless():
     """
-    <style>
-    .stProgress > div > div > div {background: #e76f51;}
-    .big-kpi {font-size:20px; font-weight:600}
-    .small-muted {color: #9aa0a6; font-size:12px}
-    .badge {padding:6px 10px; border-radius:8px; color:white; font-weight:600}
-    </style>
-    """,
-    unsafe_allow_html=True,
-)
-
-# Helpers
-def ensure_dirs():
-    UPLOAD_DIR.mkdir(exist_ok=True)
-    THUMB_DIR.mkdir(exist_ok=True)
-
-def download_model_try(urls, dest: Path, st_container=None):
-    """Try multiple urls until one works."""
-    if dest.exists():
-        return dest
-    last_exc = None
-    for u in urls:
-        try:
-            if st_container:
-                st_container.info(f"Baixando modelo de: {u}")
-            urllib.request.urlretrieve(u, str(dest))
-            if st_container:
-                st_container.success(f"Modelo salvo em {dest.name}")
-            return dest
-        except Exception as e:
-            last_exc = e
-            if st_container:
-                st_container.error(f"Falha ao baixar de {u}: {e}")
-    raise RuntimeError(f"Não foi possível baixar o modelo. Último erro: {last_exc}")
-
-def bbox_iou(boxA, boxB):
-    # box format [x1,y1,x2,y2]
-    xA = max(boxA[0], boxB[0]); yA = max(boxA[1], boxB[1])
-    xB = min(boxA[2], boxB[2]); yB = min(boxA[3], boxB[3])
-    interW = max(0, xB - xA); interH = max(0, yB - yA)
-    interArea = interW * interH
-    boxBArea = max(1e-6, (boxB[2]-boxB[0])*(boxB[3]-boxB[1]))
-    return interArea / boxBArea
-
-def color_for_percentage(pct):
-    # pct between 0 and 1 (proportion without EPI)
-    if pct < 0.05:
-        return "#2ecc71"  # green
-    elif pct < 0.25:
-        return "#f1c232"  # yellow-ish
-    else:
-        return "#e74c3c"  # red
-
-# Layout
-st.title("🦺 EPITrack Vision — Detecção de Pessoas + EPIs (visual & dashboard)")
-st.write("Envie um vídeo e o app analisará localmente. Será gerado **Analisado.mp4** com anotações, **results_epi.csv** com métricas por frame, e thumbnails das pessoas sem EPI para auditoria.")
-
-col_left, col_right = st.columns([3,1])
-
-with col_right:
-    st.header("Configurações")
-    model_mode = st.selectbox("Modelo", ["Auto-download (recomendado)", "Fazer upload do meu .pt"])
-    uploaded_model = None
-    custom_model_path = None
-    if model_mode.startswith("Fazer upload"):
-        uploaded_model = st.file_uploader("Envie pesos YOLOv8 (.pt)", type=["pt"])
-        if uploaded_model:
-            custom_model_path = BASE_DIR / "weights_cache" / uploaded_model.name
-            os.makedirs(custom_model_path.parent, exist_ok=True)
-            with open(custom_model_path, "wb") as f:
-                f.write(uploaded_model.read())
-            st.success(f"Modelo salvo em: {custom_model_path.name}")
-
-    conf = st.slider("Confiança mínima", 0.10, 0.90, 0.35, 0.05)
-    iou_nms = st.slider("IoU NMS", 0.10, 0.90, 0.45, 0.05)
-    overlap_pct = st.slider("Overlap mínimo p/ considerar EPI (%)", 1, 90, 15, 1)
-    overlap_frac = overlap_pct / 100.0
-    max_frames = st.number_input("Limite de frames (0 = todos)", min_value=0, value=0, step=1)
-    save_video_flag = st.checkbox("Salvar vídeo anotado (Analisado.mp4)", value=True)
-
-with col_left:
-    uploaded_video = st.file_uploader("Envie um vídeo (mp4, avi, mkv, mov)", type=["mp4","avi","mkv","mov"])
-
-process = st.button("▶️ Processar e gerar dashboard")
-
-# Main
-ensure_dirs()
-
-if process:
-    if not uploaded_video:
-        st.error("Por favor, envie um vídeo antes de processar.")
-        st.stop()
-
-    # save uploaded video
-    input_path = UPLOAD_DIR / uploaded_video.name
-    with open(input_path, "wb") as f:
-        f.write(uploaded_video.read())
-    st.success(f"Vídeo salvo em: {input_path}")
-
-    # determine model path
-    if custom_model_path:
-        model_path = custom_model_path
-    else:
-        model_path = MODEL_LOCAL
-
-    # download model if missing
-    progress_box = st.empty()
+    Garante que OpenCV seja a variante headless e evita conflito
+    com opencv-python/opencv-contrib.
+    """
     try:
-        if not model_path.exists():
-            progress_box.info("🔽 Iniciando download do modelo (pode levar alguns minutos)...")
-            download_model_try(MODEL_URLS, model_path, st_container=progress_box)
-        else:
-            progress_box.info(f"Modelo local encontrado: {model_path.name}")
-    except Exception as e:
-        progress_box.error(f"Não foi possível obter o modelo automaticamente: {e}")
-        st.error("Por favor baixe manualmente um modelo .pt e coloque com o nome 'yolov8n_epi.pt' na pasta do app, ou faça upload via 'Fazer upload do meu .pt'.")
-        st.stop()
+        import cv2  # noqa
+        if hasattr(cv2, "__file__") and "headless" not in (cv2.__file__ or "").lower():
+            subprocess.check_call([sys.executable, "-m", "pip", "uninstall", "-y",
+                                   "opencv-python", "opencv-contrib-python"])
+            subprocess.check_call([sys.executable, "-m", "pip", "install", "-q",
+                                   "opencv-python-headless==4.10.0.84"])
+    except Exception:
+        subprocess.check_call([sys.executable, "-m", "pip", "install", "-q",
+                               "opencv-python-headless==4.10.0.84"])
 
-    # load model
+# essenciais
+ensure("ultralytics")                                # versão controlada via requirements
+ensure("supervision", "supervision==0.21.0")
+ensure_cv2_headless()
+ensure("lapx", "lapx>=0.5.9")
+ensure("numpy", "numpy<2")
+
+# tentar streamlit-webrtc (opcional)
+try:
+    ensure("streamlit_webrtc")
+    from streamlit_webrtc import webrtc_streamer, VideoProcessorBase, RTCConfiguration
+    HAS_WEBRTC = True
+except Exception:
+    HAS_WEBRTC = False
+
+# Agora é seguro importar cv2
+import cv2  # noqa
+
+# ============================================================
+# Imports principais do pipeline
+# ============================================================
+from ultralytics import YOLO
+from ultralytics.utils import SETTINGS
+import supervision as sv
+
+# ============================================================
+# Cache dedicado do Ultralytics (evita colisões no Cloud)
+# ============================================================
+os.environ.setdefault("ULTRALYTICS_CACHE_DIR", ".ultra_cache")
+try:
+    os.makedirs(os.environ["ULTRALYTICS_CACHE_DIR"], exist_ok=True)
+except Exception:
+    pass
+
+def _clean_ultralytics_cache_for(weights_name: str):
+    """
+    Remove arquivos possivelmente corrompidos do cache do Ultralytics/torch
+    relacionados ao 'weights_name' (ex.: 'yolov8n.pt').
+    """
     try:
-        model = YOLO(str(model_path))
-    except Exception as e:
-        st.error(f"Falha ao carregar modelo YOLO: {e}")
-        st.stop()
+        candidates = []
+        stem = os.path.splitext(os.path.basename(weights_name))[0]  # 'yolov8n' de 'yolov8n.pt'
 
-    # read class names
-    model_names = getattr(model, "names", None)
-    if model_names is None:
-        try:
-            model_names = model.model.names
-        except Exception:
-            model_names = {0: "person"}
+        # 1) Pasta padrão de pesos do Ultralytics
+        weights_dir = SETTINGS.get("weights_dir", None)
+        if weights_dir and os.path.isdir(weights_dir):
+            candidates += glob.glob(os.path.join(weights_dir, f"{stem}*"))
 
-    # identify indices
-    person_indices = [int(k) for k,v in model_names.items() if v.lower() == "person"]
-    if not person_indices:
-        person_indices = [0]  # fallback
-    epi_indices = [int(k) for k in model_names.keys() if int(k) not in person_indices]
+        # 2) Nosso cache dedicado
+        ultra_cache = os.environ.get("ULTRALYTICS_CACHE_DIR")
+        if ultra_cache and os.path.isdir(ultra_cache):
+            candidates += glob.glob(os.path.join(ultra_cache, "*"))
 
-    # show detected model classes
-    st.info(f"Classes detectáveis: { [model_names[i] for i in sorted(model_names.keys())] }")
+        # 3) Cache do torch (às vezes armazena o download bruto)
+        torch_home = os.environ.get("TORCH_HOME", os.path.join(os.path.expanduser("~"), ".cache", "torch"))
+        if torch_home and os.path.isdir(torch_home):
+            candidates += glob.glob(os.path.join(torch_home, "**", f"*{stem}*"), recursive=True)
 
-    # Prepare video writer
-    cap = cv2.VideoCapture(str(input_path))
-    if not cap.isOpened():
-        st.error("Não foi possível abrir o vídeo.")
-        st.stop()
-    fps = cap.get(cv2.CAP_PROP_FPS) or 24.0
-    width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH) or 640)
-    height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT) or 480)
-    cap.release()
-
-    writer = cv2.VideoWriter(str(OUTPUT_VIDEO), cv2.VideoWriter_fourcc(*"mp4v"), fps, (width, height))
-
-    # tracking with model.track to obtain ids when available
-    stream = model.track(source=str(input_path), stream=True, conf=conf, iou=iou_nms, classes=None, persist=True, verbose=False)
-
-    frame_idx = 0
-    rows = []
-    unique_ids = set()
-    thumbs_collected = 0
-
-    total_frames_estimate = int(max(1, cap.get(cv2.CAP_PROP_FRAME_COUNT))) if cap.isOpened() else 0
-    pbar = st.progress(0)
-    status = st.empty()
-
-    # clear thumbs dir
-    if THUMB_DIR.exists():
-        shutil.rmtree(THUMB_DIR)
-    THUMB_DIR.mkdir(parents=True, exist_ok=True)
-
-    start_t = time.time()
-    try:
-        for res in stream:
-            frame_idx += 1
-            # visual frame
+        for p in set(candidates):
             try:
-                vis = res.plot()  # returns BGR numpy image
+                if os.path.isdir(p):
+                    shutil.rmtree(p, ignore_errors=True)
+                elif os.path.isfile(p):
+                    os.remove(p)
             except Exception:
-                vis = getattr(res, "orig_img", None)
-                if vis is None:
-                    continue
+                pass
+    except Exception:
+        pass
 
-            # parse boxes
-            detections = []
-            if getattr(res, "boxes", None) is not None:
+# ============================================================
+# Streamlit UI
+# ============================================================
+st.set_page_config(page_title="Pessoas + PPE Track — Streamlit", layout="wide")
+
+# guarda logs em tempo real para o dashboard
+if "rt_logs" not in st.session_state:
+    st.session_state["rt_logs"] = []   # [{frame,fps,persons_no_frame,persons_unicas,ts}]
+
+st.title("🧑‍🏭 PeopleTrack + PPE — YOLOv8 + ByteTrack (Streamlit)")
+st.caption("Detecção + Rastreamento de pessoas; opcionalmente identifica EPIs (modelo PPE separado).")
+
+# agora com Dashboard:
+tab_sys, tab_app, tab_dash = st.tabs(["🖥️ Sistema", "🎬 Processamento", "📊 Dashboard"])
+
+# ======================= Aba Sistema ========================
+with tab_sys:
+    st.subheader("Informações do Sistema/GPU")
+    import platform
+    st.write({
+        "python": platform.python_version(),
+        "numpy": np.__version__ if 'np' in globals() else None,
+        "opencv": cv2.__version__ if 'cv2' in globals() else None,
+        "ultralytics": __import__("ultralytics").__version__,
+    })
+    import shutil as _shutil, subprocess as _subprocess
+    if _shutil.which("nvidia-smi"):
+        try:
+            out = _subprocess.check_output(["nvidia-smi"], text=True)
+            st.code(out)
+        except Exception as e:
+            st.warning(f"Falha ao executar nvidia-smi: {e}")
+    else:
+        st.info("GPU NVIDIA não detectada (ou `nvidia-smi` indisponível).")
+
+# ==================== Aba Processamento =====================
+with tab_app:
+    with st.sidebar:
+        st.header("Parâmetros")
+        model_name = st.selectbox("Modelo YOLO (pessoas)", ["yolov8n.pt", "yolov8s.pt", "yolov8m.pt"], index=0)
+        conf = st.slider("Confiança mínima", 0.1, 0.9, 0.35, 0.05)
+        iou = st.slider("IoU NMS", 0.1, 0.9, 0.5, 0.05)
+        max_frames = st.number_input("Limite de frames (0 = todos)", min_value=0, value=0, step=1)
+        save_output = st.checkbox("Salvar resultado em MP4", value=True)
+        output_path = st.text_input("Caminho do MP4 de saída", value="video_output.mp4")
+        tracker_cfg = st.text_input("Arquivo de tracker (.yaml)", value="bytetrack.yaml")
+
+        st.markdown("---")
+        st.subheader("Modelo PPE (opcional)")
+        ppe_model_path = st.text_input("Caminho para modelo PPE (ex: ppe_best.pt) — deixe vazio para desativar", value="")
+        ppe_model_classes_input = st.text_input(
+            "Nomes de classes do modelo PPE (vírgula separadas, ex: helmet,vest,goggles)",
+            value="helmet,vest"
+        )
+        st.caption("Se você tiver um modelo treinado para EPIs, informe o caminho e os nomes de classes correspondentes.")
+
+        st.markdown("---")
+        if st.button("♻️ Limpar estado"):
+            for k in list(st.session_state.keys()):
                 try:
-                    xyxy = res.boxes.xyxy.cpu().numpy()
-                    cls_arr = res.boxes.cls.cpu().numpy().astype(int)
-                    confs = res.boxes.conf.cpu().numpy() if hasattr(res.boxes, "conf") else [0.0]*len(xyxy)
-                    ids_arr = None
-                    try:
-                        ids_arr = res.boxes.id.cpu().numpy().astype(int)
-                    except Exception:
-                        ids_arr = [None]*len(xyxy)
-                    for b,c,idv,cf in zip(xyxy, cls_arr, ids_arr, confs):
-                        detections.append({
-                            "xyxy": [float(b[0]), float(b[1]), float(b[2]), float(b[3])],
-                            "cls": int(c),
-                            "id": int(idv) if (idv is not None and idv == idv) else None,
-                            "conf": float(cf),
-                            "name": model_names.get(int(c), str(int(c)))
-                        })
+                    del st.session_state[k]
                 except Exception:
                     pass
+            try:
+                st.cache_resource.clear()
+                st.cache_data.clear()
+            except Exception:
+                pass
+            st.rerun()
 
-            persons = [d for d in detections if d["cls"] in person_indices]
-            epis = [d for d in detections if d["cls"] in epi_indices]
+    run_button = st.button("▶️ Processar vídeo enviado")
 
-            people_with_epi = []
-            people_without_epi = []
+    # Carregamento robusto do modelo
+    @st.cache_resource(show_spinner=True)
+    def load_model_safely(name: str):
+        try:
+            return YOLO(name)
+        except (pickle.UnpicklingError, RuntimeError, ValueError):
+            _clean_ultralytics_cache_for(name)
+            return YOLO(name)
 
-            for p in persons:
-                pid = p.get("id", None)
-                if pid is not None:
-                    unique_ids.add(int(pid))
-                has_any = False
-                for e in epis:
-                    ov = bbox_iou(p["xyxy"], e["xyxy"])
-                    if ov >= overlap_frac:
-                        has_any = True
-                        break
-                if has_any:
-                    people_with_epi.append(p)
-                else:
-                    people_without_epi.append(p)
+    model = load_model_safely(model_name)
 
-            # annotate top bar
-            cv2.rectangle(vis, (0,0), (width, 38), (24,24,24), -1)
-            txt = f"Frame {frame_idx} | People: {len(persons)} | With EPI: {len(people_with_epi)} | Without EPI: {len(people_without_epi)} | Unique IDs: {len(unique_ids)}"
-            cv2.putText(vis, txt, (8,26), cv2.FONT_HERSHEY_SIMPLEX, 0.65, (255,255,255), 2, cv2.LINE_AA)
+    # Carrega modelo PPE se foi informado
+    ppe_model = None
+    ppe_classes = []
+    if ppe_model_path and ppe_model_path.strip():
+        try:
+            ppe_model = load_model_safely(ppe_model_path.strip())
+            # parse classes string
+            ppe_classes = [c.strip() for c in ppe_model_classes_input.split(",") if c.strip()]
+        except Exception as e:
+            st.warning(f"Falha ao carregar modelo PPE: {e}")
+            ppe_model = None
+            ppe_classes = []
 
-            # write frame
-            writer.write(vis)
+    # Upload
+    uploaded = st.file_uploader(
+        "Envie um arquivo de vídeo (mp4, avi, mov, mkv…)", type=None, accept_multiple_files=False
+    )
 
-            # save thumbnails of people without EPI (one per person per frame)
-            for idx_p, p in enumerate(people_without_epi):
-                x1,y1,x2,y2 = map(int, p["xyxy"])
-                # clamp
-                x1 = max(0,x1); y1 = max(0,y1); x2 = min(width-1,x2); y2 = min(height-1,y2)
-                if x2<=x1 or y2<=y1:
-                    continue
-                crop = vis[y1:y2, x1:x2]
-                tname = THUMB_DIR / f"f{frame_idx}_p{idx_p}.jpg"
-                cv2.imwrite(str(tname), crop)
-                thumbs_collected += 1
+    # Layout principal
+    video_col, metrics_col = st.columns([3, 1])
+    frame_placeholder = video_col.empty()
+    track_table_placeholder = metrics_col.empty()
+    csv_preview_placeholder = st.empty()
 
-            rows.append({
-                "frame": frame_idx,
-                "people_no_frame": len(persons),
-                "people_with_epi": len(people_with_epi),
-                "people_without_epi": len(people_without_epi),
-                "people_unicas": len(unique_ids)
+    # Utilitários
+    def _save_to_temp(uploaded_file) -> str:
+        suffix = os.path.splitext(uploaded_file.name)[-1] or ".mp4"
+        base = os.path.splitext(os.path.basename(uploaded_file.name))[0] or "input"
+        temp_path = os.path.join(f"data_cache_input_{base}{suffix}")
+        with open(temp_path, "wb") as f:
+            f.write(uploaded_file.read())
+        return temp_path
+
+    def _box_center(box):
+        # box: [x1,y1,x2,y2]
+        x1, y1, x2, y2 = box
+        return ((x1 + x2) / 2.0, (y1 + y2) / 2.0)
+
+    def _center_in_box(center, box):
+        x, y = center
+        x1, y1, x2, y2 = box
+        return x >= x1 and x <= x2 and y >= y1 and y <= y2
+
+    # Pipeline
+    def process_video(input_path: str):
+        from datetime import datetime
+
+        writer = None
+        unique_ids = set()
+        frame_count = 0
+        start_time = time.time()
+        logs = []
+
+        # Track only persons (COCO class 0)
+        stream = model.track(
+            source=input_path,
+            stream=True,
+            conf=conf,
+            iou=iou,
+            classes=[0],  # COCO: person
+            tracker=tracker_cfg,
+            persist=True,
+            verbose=False,
+        )
+
+        for result in stream:
+            frame = result.plot()
+            frame_count += 1
+
+            persons_ids = []
+            persons_boxes = []  # aligned with ids -> boxes in xyxy
+            if result.boxes is not None and result.boxes.id is not None:
+                try:
+                    ids = result.boxes.id.cpu().numpy().tolist()
+                except Exception:
+                    ids = []
+                # boxes: xyxy as tensors
+                try:
+                    bxs = result.boxes.xyxy.cpu().numpy().tolist()
+                except Exception:
+                    bxs = []
+                # align
+                for tid, bx in zip(ids, bxs):
+                    tid = int(tid)
+                    persons_ids.append(tid)
+                    persons_boxes.append([float(b) for b in bx])
+                    unique_ids.add(tid)
+
+            # PPE detection & association (se houver modelo)
+            persons_with_ppe = {}  # tid -> {class_name: [boxes...] } or empty dict
+            ppe_counts_this_frame = 0
+            if ppe_model is not None:
+                # execute PPE model on the raw frame
+                try:
+                    ppe_results = ppe_model.predict(frame, conf=conf, iou=iou, verbose=False)
+                    # ppe_results may be a list; take first
+                    ppe_res = ppe_results[0]
+                    ppe_boxes = []
+                    ppe_labels = []
+                    # attempt to extract xyxy & class names
+                    if getattr(ppe_res, "boxes", None) is not None:
+                        try:
+                            xyxy = ppe_res.boxes.xyxy.cpu().numpy().tolist()
+                        except Exception:
+                            xyxy = []
+                        try:
+                            cls_ids = ppe_res.boxes.cls.cpu().numpy().astype(int).tolist()
+                        except Exception:
+                            cls_ids = []
+                        # If the model has .names mapping, use it; else fall back to provided ppe_classes order
+                        names_map = getattr(ppe_model, "model", None)
+                        # safer: try ppe_model.names
+                        model_names = getattr(ppe_model, "names", None)
+                        for i, bx in enumerate(xyxy):
+                            cid = cls_ids[i] if i < len(cls_ids) else None
+                            label = None
+                            if model_names and cid is not None and cid in model_names:
+                                label = model_names[cid]
+                            else:
+                                # fallback: if user provided ppe_classes, map by index
+                                if cid is not None and cid < len(ppe_classes):
+                                    label = ppe_classes[cid]
+                                else:
+                                    label = str(cid) if cid is not None else "ppe"
+                            ppe_boxes.append([float(b) for b in bx])
+                            ppe_labels.append(label)
+                    # now associate each ppe_box to a person if center inside person bbox
+                    for pb, pl in zip(ppe_boxes, ppe_labels):
+                        ppe_counts_this_frame += 1
+                        center = _box_center(pb)
+                        matched = False
+                        for tid, pbox in zip(persons_ids, persons_boxes):
+                            if _center_in_box(center, pbox):
+                                persons_with_ppe.setdefault(tid, {}).setdefault(pl, []).append(pb)
+                                matched = True
+                                break
+                        # if not matched, ignore or could associate by IoU in future
+                except Exception:
+                    # não bloquear processamento por falha na inferência PPE
+                    persons_with_ppe = {}
+                    ppe_counts_this_frame = 0
+
+            # build log for this frame
+            logs.append({
+                "frame": frame_count,
+                "person_ids_no_frame": persons_ids,
+                "persons_no_frame": len(persons_ids),
+                "persons_unicas": len(unique_ids),
+                "ppe_detections_frame": ppe_counts_this_frame,
+                "persons_with_ppe_map": persons_with_ppe,  # pode ser complexo; útil para debug/export
             })
 
-            # update UI
-            elapsed = time.time() - start_t
-            status.text(f"Processando frame {frame_idx} — elapsed {elapsed:.1f}s")
-            if total_frames_estimate > 0:
-                p = min(1.0, frame_idx/total_frames_estimate)
-                pbar.progress(p)
-            else:
-                # step progress in small increments when no count known
-                pbar.progress(min(0.95, frame_idx % 100 / 100.0))
+            # visualization & writer
+            if save_output and writer is None:
+                h, w = frame.shape[:2]
+                fourcc = cv2.VideoWriter_fourcc(*"mp4v")
+                writer = cv2.VideoWriter(output_path, fourcc, 24.0, (w, h))
 
-            if max_frames and frame_idx >= max_frames:
+            # overlay textual info for each person: ID + PPE summary
+            try:
+                # draw person boxes with IDs and small PPE badge text
+                for tid, pbox in zip(persons_ids, persons_boxes):
+                    x1, y1, x2, y2 = [int(v) for v in pbox]
+                    cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
+                    label = f"ID:{tid}"
+                    ppe_info = ""
+                    if tid in persons_with_ppe and persons_with_ppe[tid]:
+                        ppe_info = " | " + ",".join(sorted(persons_with_ppe[tid].keys()))
+                    cv2.putText(frame, label + ppe_info, (x1, max(15, y1-10)),
+                                cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
+            except Exception:
+                pass
+
+            if save_output and writer is not None:
+                writer.write(frame)
+
+            frame_placeholder.image(frame[:, :, ::-1], channels="RGB")
+
+            elapsed = max(time.time() - start_time, 1e-6)
+            fps = frame_count / elapsed
+            metrics_col.metric("FPS (estimado)", f"{fps:0.1f}")
+            metrics_col.metric("Pessoas no frame", str(len(persons_ids)))
+            metrics_col.metric("Pessoas únicas", str(len(unique_ids)))
+
+            if len(unique_ids) > 0:
+                try:
+                    sample_ids = sorted(unique_ids)[-10:]
+                except Exception:
+                    sample_ids = list(unique_ids)[:10]
+                track_table_placeholder.write({"IDs rastreadas (amostra)": sample_ids})
+
+            # ---------- LOGS p/ DASHBOARD ----------
+            st.session_state["rt_logs"].append({
+                "ts": datetime.utcnow().isoformat(),
+                "frame": frame_count,
+                "fps": float(fps),
+                "persons_no_frame": int(len(persons_ids)),
+                "persons_unicas": int(len(unique_ids)),
+            })
+            if len(st.session_state["rt_logs"]) > 5000:
+                st.session_state["rt_logs"] = st.session_state["rt_logs"][-2000:]
+            # ---------------------------------------
+
+            if max_frames and frame_count >= max_frames:
                 break
 
-    except Exception as e:
-        st.error(f"Erro durante processamento: {e}")
-    finally:
-        writer.release()
-        pbar.empty()
-        status.empty()
+        if writer is not None:
+            writer.release()
 
-    # postprocess - save CSV
-    if rows:
-        df = pd.DataFrame(rows)
-        df.to_csv(OUTPUT_CSV, index=False)
-        st.success(f"CSV salvo em: {OUTPUT_CSV.name}")
-    else:
-        df = pd.DataFrame(columns=["frame","people_no_frame","people_with_epi","people_without_epi","people_unicas"])
-        st.warning("Nenhuma métrica gerada — verifique se o vídeo continha frames e deteções.")
+        return {
+            "frames": frame_count,
+            "unique_ids": len(unique_ids),
+            "out": output_path if save_output else None,
+            "logs": logs,
+        }
 
-    # show results
-    st.markdown("---")
-    st.header("📊 Dashboard de resultado")
+    # Execução
+    summary = None
 
-    # KPIs
-    if not df.empty:
-        total_frames = int(df["frame"].max())
-        total_people_detections = int(df["people_no_frame"].sum())
-        total_without = int(df["people_without_epi"].sum())
-        total_with = int(df["people_with_epi"].sum())
-        unique_count = int(df["people_unicas"].max() if not df["people_unicas"].empty else 0)
-        pct_without = total_without / max(1, (total_without + total_with))
-        pct_without_display = pct_without * 100.0
-
-        k1, k2, k3, k4 = st.columns(4)
-        k1.metric("Frames processados", total_frames)
-        k2.metric("Pessoas únicas (estimado)", unique_count)
-        k3.metric("Pico pessoas/frame", int(df["people_no_frame"].max()))
-        k4.metric("Total sem EPI (acum.)", total_without)
-
-        # percent badge with color
-        color = color_for_percentage(pct_without)
-        st.markdown(f"<div style='display:flex; gap:12px; align-items:center'><div style='font-weight:700'>Percentual sem EPI (acum.):</div><div class='badge' style='background:{color}'>{pct_without_display:.1f}%</div></div>", unsafe_allow_html=True)
-
-        # time-series chart
-        st.write("### Séries temporais")
-        st.line_chart(df.set_index("frame")[["people_no_frame","people_with_epi","people_without_epi"]])
-
-        # table
-        st.write("### Tabela (amostra)")
-        st.dataframe(df.head(200))
-
-        # downloads
-        csv_bytes = df.to_csv(index=False).encode("utf-8")
-        st.download_button("📥 Baixar CSV", data=csv_bytes, file_name=OUTPUT_CSV.name, mime="text/csv")
-
-        if OUTPUT_VIDEO.exists() and save_video_flag:
-            st.write("### Vídeo anotado")
-            st.video(str(OUTPUT_VIDEO))
-            st.success(f"Vídeo anotado salvo: {OUTPUT_VIDEO.name}")
-
-        # prepare thumbs zip
-        if THUMB_DIR.exists() and any(THUMB_DIR.iterdir()):
-            zip_path = BASE_DIR / "thumbs_no_epi.zip"
-            with zipfile.ZipFile(zip_path, "w", compression=zipfile.ZIP_DEFLATED) as z:
-                for t in sorted(THUMB_DIR.glob("*.jpg")):
-                    z.write(t, arcname=t.name)
-            with open(zip_path, "rb") as f:
-                st.download_button("📥 Baixar thumbnails (pessoas sem EPI)", f.read(), file_name=zip_path.name, mime="application/zip")
+    if run_button:
+        if uploaded is None:
+            st.error("Envie um vídeo primeiro.")
         else:
-            st.info("Nenhuma pessoa sem EPI detectada (nenhum thumbnail).")
+            in_path = _save_to_temp(uploaded)
+            with st.spinner("Processando vídeo..."):
+                summary = process_video(in_path)
 
+            st.success(f"Concluído: {summary['frames']} frames • {summary['unique_ids']} pessoas únicas.")
+
+            if save_output and summary.get("out"):
+                st.video(summary["out"])
+
+            if summary.get("logs"):
+                import pandas as pd
+                # para exportar: transformamos o mapa persons_with_ppe em algo serializável
+                df_rows = []
+                for row in summary["logs"]:
+                    frame = row["frame"]
+                    for pid in row.get("person_ids_no_frame", []):
+                        ppe_map = row.get("persons_with_ppe_map", {}).get(pid, {})
+                        ppe_present = ",".join(sorted(ppe_map.keys())) if ppe_map else ""
+                        df_rows.append({
+                            "frame": frame,
+                            "person_id": pid,
+                            "ppe_present": ppe_present,
+                        })
+                df_logs = pd.DataFrame(df_rows)
+                if df_logs.empty:
+                    df_logs = pd.DataFrame(summary["logs"])  # fallback
+                csv_preview_placeholder.dataframe(df_logs.head(50), use_container_width=True)
+                csv_bytes = df_logs.to_csv(index=False).encode("utf-8")
+                st.download_button(
+                    "📥 Baixar CSV com métricas (pessoas + PPE)",
+                    data=csv_bytes,
+                    file_name="rastreamento_pessoas_ppe.csv",
+                    mime="text/csv",
+                )
+
+# ======================= Aba Dashboard ======================
+with tab_dash:
+    st.subheader("📊 Dashboard em tempo (quase) real")
+
+    import pandas as pd
+
+    logs = st.session_state.get("rt_logs", [])
+    if not logs:
+        st.info("Nenhum dado ainda. Rode o processamento na aba **🎬 Processamento**.")
     else:
-        st.info("Nenhuma métrica disponível para exibir no dashboard.")
+        df = pd.DataFrame(logs)
 
-    st.success("Processamento finalizado 🎉")
-    st.balloons()
+        # KPIs
+        c1, c2, c3, c4 = st.columns(4)
+        c1.metric("Frames processados", int(df["frame"].max()))
+        c2.metric("FPS médio", f"{df['fps'].mean():.1f}")
+        c3.metric("Pico de pessoas/frame", int(df['persons_no_frame'].max()))
+        c4.metric("Pessoas únicas (total)", int(df["persons_unicas"].max()))
 
-# End of app
+        st.markdown("---")
+        st.write("### Séries temporais")
+
+        tcol1, tcol2 = st.columns(2)
+        with tcol1:
+            st.caption("FPS por frame")
+            st.line_chart(df.set_index("frame")["fps"])
+        with tcol2:
+            st.caption("Pessoas no frame")
+            st.line_chart(df.set_index("frame")["persons_no_frame"])
+
+        st.markdown("---")
+        st.write("### Últimos eventos")
+        st.dataframe(
+            df[["frame", "fps", "persons_no_frame", "persons_unicas", "ts"]]
+              .sort_values("frame", ascending=False)
+              .head(25),
+            use_container_width=True,
+            hide_index=True
+        )
+
+        st.markdown("---")
+        st.write("### Alertas")
+
+        alerts = []
+        # regras simples (ajuste limiares conforme preferir)
+        if df["fps"].mean() < 12:
+            alerts.append("⚠️ **Baixo desempenho**: FPS médio abaixo de 12.")
+        if df["persons_no_frame"].max() >= 5:
+            alerts.append("🚦 **Alta densidade**: pico ≥ 5 pessoas no mesmo frame.")
+        last_row = df.sort_values("frame").iloc[-1]
+        if last_row["persons_no_frame"] == 0:
+            alerts.append("ℹ️ **Sem detecções no último frame**.")
+
+        if alerts:
+            for a in alerts:
+                st.write(a)
+        else:
+            st.success("✅ Nenhum alerta no momento.")
