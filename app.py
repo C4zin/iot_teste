@@ -33,11 +33,30 @@ st.markdown("""
         font-weight: 800 !important;
         text-transform: uppercase;
         letter-spacing: 1px;
+        display: flex;
+        align-items: center;
+        gap: 12px;
     }
     h2, h3 {
         color: #b22222 !important;
         font-weight: 700 !important;
         text-transform: uppercase;
+    }
+
+    /* Ícone do título */
+    .header-icon {
+        width: 45px;
+        height: 45px;
+        border-radius: 8px;
+        object-fit: contain;
+    }
+
+    /* Upload box - borda sólida */
+    div[data-testid="stFileUploader"] {
+        background-color: #1c1c1c !important;
+        border: 2px solid #b22222 !important;
+        border-radius: 10px !important;
+        color: #d3d3d3 !important;
     }
 
     /* Botões */
@@ -55,51 +74,53 @@ st.markdown("""
         transform: scale(1.05);
     }
 
+    /* Barra de progresso */
+    .stProgress > div > div > div {
+        background-color: #b22222;
+    }
+
     /* Métricas */
     div[data-testid="stMetricValue"] {
         color: #e0e0e0 !important;
     }
 
-    /* Upload box - sem pontilhado */
-    div[data-testid="stFileUploader"] {
-        background-color: #1c1c1c !important;
-        border: 2px solid #b22222 !important;
-        border-radius: 10px !important;
-        color: #d3d3d3 !important;
-    }
-
-    /* Mensagens (info/sucesso/erro) */
+    /* Mensagens */
     .stAlert {
         border-radius: 8px;
     }
     .stAlert div {
         color: #fff !important;
     }
-    .stAlert[data-baseweb="alert"]:has(div[data-testid="stNotificationContentSuccess"]) {
-        background-color: rgba(178, 34, 34, 0.2) !important;
-        border-left: 5px solid #b22222 !important;
-    }
 
-    /* Gráficos Plotly */
+    /* Gráficos */
     .plotly {
         background-color: transparent !important;
-    }
-
-    /* Barra de progresso */
-    .stProgress > div > div > div {
-        background-color: #b22222;
     }
     </style>
 """, unsafe_allow_html=True)
 
-# ---------------- CABEÇALHO ----------------
-st.title("SafeWork - Projeto Global Solution")
+# ---------------- CABEÇALHO COM ÍCONE ----------------
+icon_path = "logo.png"  # coloque o arquivo logo.png na mesma pasta do app.py
+
+if os.path.exists(icon_path):
+    st.markdown(
+        f"""
+        <div style="display:flex; align-items:center; gap:12px;">
+            <img src="data:image/png;base64,{open(icon_path, 'rb').read().hex()}" width="45" class="header-icon"/>
+            <h1 style="margin-bottom:0;">SafeWork - Projeto Global Solution</h1>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+else:
+    st.title("🦺 SafeWork - Projeto Global Solution")
+
 st.markdown("### Análise de Trabalhadores")
 st.markdown("---")
 
 # ---------------- UPLOAD ----------------
 uploaded_file = st.file_uploader(
-    "Envie um vídeo (.mp4, .mov, .avi)", 
+    "Envie um vídeo (.mp4, .mov, .avi)",
     type=["mp4", "mov", "avi"]
 )
 
