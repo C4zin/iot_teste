@@ -1,108 +1,70 @@
 import streamlit as st
-import cv2
 import tempfile
-import os
+import cv2
 import numpy as np
 from ultralytics import YOLO
 
-# -------------------------------
-# Configuração da página
-# -------------------------------
-st.set_page_config(page_title="Analisador de Vídeos PPE", page_icon="🦺", layout="wide")
+st.set_page_config(page_title="Análise de Vídeo PPE", layout="wide")
+st.title("🎥 Analisador de Vídeos - Equipamentos de Proteção (PPE)")
 
-st.title("🦺 Analisador de Vídeos PPE")
-st.write("Envie um vídeo para análise (.mp4, .mov, .avi)")
+model = YOLO("yolov8n.pt")  # Modelo leve
 
-# -------------------------------
-# Upload do vídeo
-# -------------------------------
-uploaded_file = st.file_uploader("Drag and drop file here", type=["mp4", "mov", "avi", "mpeg"])
-
-# Cria o placeholder de status
-status_placeholder = st.empty()
-frame_placeholder = st.empty()
-progress_bar = st.progress(0)
-
-# -------------------------------
-# Função principal de análise
-# -------------------------------
 def analyze_video(input_path, output_path):
-    model = YOLO("yolov8n.pt")  # modelo leve (substitua se quiser outro)
     cap = cv2.VideoCapture(input_path)
     if not cap.isOpened():
-        st.error("Erro ao abrir o vídeo.")
-        return "Erro: vídeo não pôde ser aberto."
+        st.error("❌ Erro ao abrir o vídeo. Verifique o arquivo enviado.")
+        return "Erro ao abrir o vídeo"
 
+    frame_placeholder = st.empty()
     frame_count = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-    fps = cap.get(cv2.CAP_PROP_FPS)
-    width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-    height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+    progress_bar = st.progress(0)
 
-    # Configura o vídeo de saída
+    # Codificador para salvar vídeo processado
     fourcc = cv2.VideoWriter_fourcc(*'mp4v')
+    fps = cap.get(cv2.CAP_PROP_FPS)
+    width, height = int(cap.get(3)), int(cap.get(4))
     out = cv2.VideoWriter(output_path, fourcc, fps, (width, height))
 
-    processed = 0
+    processed_frames = 0
 
     while True:
         ret, frame = cap.read()
         if not ret:
-            break  # fim do vídeo
+            break
 
-        # Garante que o frame é válido
-        if frame is None or frame.size == 0:
-            st.warning("Frame inválido detectado, pulando...")
-            continue
-
-        # Executa a predição
-        results = model(frame, verbose=False)
-
-        # Renderiza resultados
+        results = model(frame)
         annotated_frame = results[0].plot()
 
-        # Atualiza visualização no app
+        # Conversão para exibir no Streamlit
         frame_rgb = cv2.cvtColor(annotated_frame, cv2.COLOR_BGR2RGB)
-        frame_placeholder.image(frame_rgb, channels="RGB", use_container_width=True)
 
-        # Escreve no vídeo final
+        # Evita erro caso frame_rgb venha vazio
+        if frame_rgb is not None and frame_rgb.size > 0:
+            frame_placeholder.image(frame_rgb, channels="RGB", use_container_width=True)
+
         out.write(annotated_frame)
 
-        # Atualiza progresso
-        processed += 1
-        progress = int((processed / frame_count) * 100)
-        progress_bar.progress(min(progress, 100))
+        processed_frames += 1
+        progress_bar.progress(min(processed_frames / frame_count, 1.0))
 
     cap.release()
     out.release()
+    st.success("✅ Análise concluída!")
+    st.video(output_path)
+    return "Análise finalizada com sucesso"
 
-    return f"✅ Análise concluída! {processed} frames processados."
+uploaded_file = st.file_uploader(
+    "Envie um vídeo para análise (.mp4, .mov, .avi)", 
+    type=["mp4", "mov", "avi"]
+)
 
-# -------------------------------
-# Execução principal
-# -------------------------------
 if uploaded_file is not None:
-    # Salva o vídeo temporariamente
-    with tempfile.NamedTemporaryFile(delete=False, suffix=".mp4") as tmp_input:
-        tmp_input.write(uploaded_file.read())
-        input_path = tmp_input.name
+    with tempfile.NamedTemporaryFile(delete=False, suffix=".mp4") as temp_input:
+        temp_input.write(uploaded_file.read())
+        temp_input_path = temp_input.name
 
-    output_path = os.path.join(tempfile.gettempdir(), "output.mp4")
+    with tempfile.NamedTemporaryFile(delete=False, suffix=".mp4") as temp_output:
+        temp_output_path = temp_output.name
 
     st.info("🔍 Analisando vídeo, isso pode levar alguns minutos...")
-
-    summary = analyze_video(input_path, output_path)
-
-    # Exibe mensagem final
-    status_placeholder.success(summary)
-
-    # Disponibiliza download
-    with open(output_path, "rb") as f:
-        st.download_button(
-            label="⬇️ Baixar vídeo analisado",
-            data=f,
-            file_name="video_analisado.mp4",
-            mime="video/mp4"
-        )
-
-else:
-    st.warning("Envie um vídeo para iniciar a análise.")
+    analyze_video(temp_input_path, temp_output_path)
