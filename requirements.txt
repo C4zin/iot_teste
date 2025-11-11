@@ -1,8 +1,9 @@
-streamlit==1.37.0
-ultralytics==8.2.0
+streamlit==1.39.0
+ultralytics==8.3.23
 opencv-python-headless==4.10.0.84
-numpy<2
-pandas
-torch>=2.1.0
-torchvision>=0.16.0
-PyYAML
+ffmpeg-python==0.2.0
+numpy==1.26.4
+pandas==2.2.3
+tqdm==4.66.5
+torch>=2.2.0
+torchvision>=0.17.0
