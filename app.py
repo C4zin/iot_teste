@@ -8,14 +8,89 @@ from ultralytics import YOLO
 import plotly.express as px
 
 # ---------------- CONFIGURAÇÃO ----------------
-st.set_page_config(
-    page_title="Analisador de EPI (PPE)",
-    page_icon="🦺",
-    layout="wide"
-)
+st.set_page_config(page_title="Analisador de EPI", page_icon="🦺", layout="wide")
 
+# ---------------- CSS CUSTOM ----------------
+st.markdown("""
+    <style>
+    /* Fundo geral */
+    .stApp {
+        background-color: #0f0f0f;
+        color: #e0e0e0;
+    }
+
+    /* Caixa principal */
+    .block-container {
+        padding: 2rem 3rem;
+        background: linear-gradient(180deg, #1a1a1a 0%, #0f0f0f 100%);
+        border-radius: 12px;
+        box-shadow: 0px 0px 15px rgba(255, 0, 0, 0.15);
+    }
+
+    /* Cabeçalhos */
+    h1, h2, h3 {
+        color: #b22222 !important;
+        font-weight: 700 !important;
+        text-transform: uppercase;
+    }
+
+    /* Botões */
+    div[data-testid="stDownloadButton"] button {
+        background-color: #b22222;
+        color: #fff;
+        font-weight: 600;
+        border-radius: 10px;
+        padding: 0.6rem 1rem;
+        border: none;
+        transition: all 0.3s ease-in-out;
+    }
+    div[data-testid="stDownloadButton"] button:hover {
+        background-color: #e63946;
+        transform: scale(1.05);
+    }
+
+    /* Métricas */
+    div[data-testid="stMetricValue"] {
+        color: #e0e0e0 !important;
+    }
+
+    /* Upload box */
+    div[data-testid="stFileUploader"] {
+        background-color: #1c1c1c !important;
+        border: 2px dashed #b22222 !important;
+        border-radius: 10px !important;
+        color: #d3d3d3 !important;
+    }
+
+    /* Mensagens (info/sucesso/erro) */
+    .stAlert {
+        border-radius: 8px;
+    }
+    .stAlert div {
+        color: #fff !important;
+    }
+
+    .stAlert[data-baseweb="alert"]:has(div[data-testid="stNotificationContentSuccess"]) {
+        background-color: rgba(178, 34, 34, 0.2) !important;
+        border-left: 5px solid #b22222 !important;
+    }
+
+    /* Tabelas e gráficos */
+    .plotly {
+        background-color: transparent !important;
+    }
+
+    /* Barra de progresso */
+    .stProgress > div > div > div {
+        background-color: #b22222;
+    }
+    </style>
+""", unsafe_allow_html=True)
+
+# ---------------- TÍTULO ----------------
 st.title("🦺 Analisador de Vídeo de EPI com IA")
-st.markdown("Envie um vídeo para análise e visualize um **dashboard interativo** com as estatísticas de detecção de EPIs.")
+st.markdown("### Utilize inteligência artificial para verificar automaticamente o uso de EPIs em vídeos.")
+st.markdown("---")
 
 # ---------------- UPLOAD ----------------
 uploaded_file = st.file_uploader(
@@ -46,7 +121,6 @@ def analyze_video(input_path, output_path):
 
     progress = st.progress(0)
 
-    # Contadores globais
     counters = {"person": 0, "helmet": 0, "vest": 0, "mask": 0, "unknown": 0}
 
     for i in range(frame_count):
@@ -93,9 +167,7 @@ if uploaded_file:
 
     if counters:
         st.success("✅ Análise concluída com sucesso!")
-
-        # ---------------- DASHBOARD GRÁFICO ----------------
-        st.subheader("📊 Dashboard de Detecção de EPI")
+        st.markdown("## 📊 Dashboard de Detecção de EPI")
 
         total_epi = counters["helmet"] + counters["vest"] + counters["mask"]
         conformidade = (total_epi / counters["person"] * 100) if counters["person"] > 0 else 0
@@ -106,9 +178,11 @@ if uploaded_file:
         col3.metric("Coletes", counters["vest"])
         col4.metric("Máscaras", counters["mask"])
 
-        # Gráfico de barras
+        st.markdown(f"### 🧮 Conformidade estimada: **{conformidade:.1f}%**")
+
+        # -------- GRÁFICOS --------
         data = pd.DataFrame({
-            "Tipo": ["Pessoas", "Capacetes", "Coletes", "Máscaras", "Desconhecido"],
+            "Tipo": ["Pessoas", "Capacetes", "Coletes", "Máscaras", "Outros"],
             "Quantidade": [
                 counters["person"],
                 counters["helmet"],
@@ -125,25 +199,22 @@ if uploaded_file:
             color="Tipo",
             text="Quantidade",
             title="Distribuição de Detecções por Tipo",
-            color_discrete_sequence=px.colors.qualitative.Safe
+            color_discrete_sequence=["#b22222", "#8b0000", "#696969", "#a9a9a9", "#2f2f2f"]
         )
         fig_bar.update_traces(textposition="outside")
         st.plotly_chart(fig_bar, use_container_width=True)
 
-        # Gráfico de pizza
         fig_pie = px.pie(
             data,
             names="Tipo",
             values="Quantidade",
             title="Proporção de Detecções por Tipo",
-            color_discrete_sequence=px.colors.qualitative.Pastel
+            color_discrete_sequence=["#b22222", "#8b0000", "#696969", "#a9a9a9", "#2f2f2f"]
         )
         fig_pie.update_traces(textinfo="label+percent")
         st.plotly_chart(fig_pie, use_container_width=True)
 
-        st.markdown(f"### 🧮 Conformidade estimada: **{conformidade:.1f}%**")
-
-        # ---------------- BOTÃO DE DOWNLOAD ----------------
+        # -------- BOTÃO DE DOWNLOAD --------
         with open(output_path, "rb") as f:
             st.download_button(
                 label="📥 Baixar vídeo analisado",
