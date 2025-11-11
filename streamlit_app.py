@@ -1,7 +1,9 @@
 # streamlit_app.py
 import os, sys, time, glob, shutil, importlib, subprocess, numpy as np, streamlit as st
 
-# ===================== DEPENDÊNCIAS =====================
+# ============================================================
+# 🔧 Dependências e ambiente
+# ============================================================
 def ensure(pkg, pip_name=None):
     pip_name = pip_name or pkg
     try:
@@ -28,7 +30,9 @@ from ultralytics import YOLO
 from ultralytics.utils import SETTINGS
 import supervision as sv
 
-# ===================== CONFIG PÁGINA + CSS =====================
+# ============================================================
+# 🌈 Aparência — tema vermelho/preto
+# ============================================================
 st.set_page_config(page_title="Pessoas + EPI Tracker", layout="wide")
 
 st.markdown("""
@@ -44,7 +48,9 @@ section[data-testid="stSidebar"] { background-color: #1a1a1a; border-right: 2px 
 </style>
 """, unsafe_allow_html=True)
 
-# ===================== FUNÇÕES AUXILIARES =====================
+# ============================================================
+# 🧰 Utilitários
+# ============================================================
 os.environ.setdefault("ULTRALYTICS_CACHE_DIR", ".ultra_cache")
 os.makedirs(os.environ["ULTRALYTICS_CACHE_DIR"], exist_ok=True)
 
@@ -61,27 +67,47 @@ def _clean_ultralytics_cache_for(weights_name: str):
                     except: pass
     except: pass
 
-# ===================== CORREÇÃO PYTORCH 2.6 =====================
+# ============================================================
+# ⚙️ Carregamento seguro — PyTorch 2.6+
+# ============================================================
 def load_model_safely(model_name: str):
+    """
+    Corrige erro de carregamento do PyTorch 2.6 (weights_only=True)
+    adicionando classes seguras ao contexto.
+    """
     import torch
     from ultralytics.nn.tasks import DetectionModel
-    if hasattr(torch.serialization, "add_safe_globals"):
-        torch.serialization.add_safe_globals([DetectionModel])
     try:
-        return YOLO(model_name)
+        # --- Registrar classes seguras ---
+        if hasattr(torch.serialization, "add_safe_globals"):
+            from torch.nn.modules.container import Sequential
+            from torch.nn import ModuleList, ModuleDict
+            torch.serialization.add_safe_globals([
+                DetectionModel, Sequential, ModuleList, ModuleDict
+            ])
+        # --- Carregar modelo ---
+        model = YOLO(model_name)
+        return model
     except Exception as e:
         st.warning(f"⚠️ Erro inicial ao carregar {model_name}: {e}")
         _clean_ultralytics_cache_for(model_name)
         try:
-            torch.serialization.add_safe_globals([DetectionModel])
-            return YOLO(model_name)
+            from torch.nn.modules.container import Sequential
+            from torch.nn import ModuleList, ModuleDict
+            torch.serialization.add_safe_globals([
+                DetectionModel, Sequential, ModuleList, ModuleDict
+            ])
+            model = YOLO(model_name)
+            return model
         except Exception as e2:
             st.error(f"🚫 Falha crítica ao carregar '{model_name}': {e2}")
             st.stop()
 
-# ===================== INTERFACE =====================
+# ============================================================
+# 🧭 Interface principal
+# ============================================================
 st.title("🧑‍🏭 Rastreamento de Pessoas + EPIs")
-st.caption("Detecção e rastreamento de pessoas, com reconhecimento de EPIs opcionais (capacete, colete etc.)")
+st.caption("Detecção e rastreamento de pessoas, com reconhecimento opcional de EPIs (capacete, colete etc.)")
 
 tab_sys, tab_app, tab_dash = st.tabs(["🖥️ Sistema", "🎬 Processamento", "📊 Dashboard"])
 
@@ -132,10 +158,10 @@ with tab_app:
                 frame_count += 1
                 frame_ph.image(frame[:, :, ::-1], channels="RGB", caption=f"Frame {frame_count}")
                 if frame_count > 300:
-                    st.warning("Interrompido após 300 frames (modo demo).")
+                    st.warning("Interrompido após 300 frames (modo demonstração).")
                     break
             st.success(f"✅ Processamento concluído ({frame_count} frames).")
 
 # ---------- Aba Dashboard ----------
 with tab_dash:
-    st.info("📊 Dashboard em construção — incluirá FPS médio, contagem de pessoas e EPIs detectados.")
+    st.info("📊 Dashboard em construção — mostrará FPS médio, contagem de pessoas e EPIs detectados.")
