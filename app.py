@@ -1,104 +1,108 @@
 import streamlit as st
-from ultralytics import YOLO
-import tempfile
 import cv2
+import tempfile
 import os
 import numpy as np
-from PIL import Image
-import time
+from ultralytics import YOLO
 
-st.set_page_config(
-    page_title="Análise de EPI com IA",
-    layout="wide",
-    page_icon="🦺"
-)
+# -------------------------------
+# Configuração da página
+# -------------------------------
+st.set_page_config(page_title="Analisador de Vídeos PPE", page_icon="🦺", layout="wide")
 
-st.title("🦺 Sistema de Análise de EPI com IA")
-st.markdown(
-    "Envie um vídeo para o sistema detectar automaticamente **pessoas com e sem EPI** (capacete, colete, luvas etc.)."
-)
+st.title("🦺 Analisador de Vídeos PPE")
+st.write("Envie um vídeo para análise (.mp4, .mov, .avi)")
 
-# --- Upload de vídeo ---
-uploaded_file = st.file_uploader("Envie um vídeo para análise (.mp4, .mov, .avi)", type=["mp4", "mov", "avi"])
+# -------------------------------
+# Upload do vídeo
+# -------------------------------
+uploaded_file = st.file_uploader("Drag and drop file here", type=["mp4", "mov", "avi", "mpeg"])
 
-# --- Carregar modelo YOLO ---
-@st.cache_resource
-def load_model():
-    model = YOLO("yolov8n.pt")  # pode ser substituído por um modelo customizado
-    return model
+# Cria o placeholder de status
+status_placeholder = st.empty()
+frame_placeholder = st.empty()
+progress_bar = st.progress(0)
 
-model = load_model()
+# -------------------------------
+# Função principal de análise
+# -------------------------------
+def analyze_video(input_path, output_path):
+    model = YOLO("yolov8n.pt")  # modelo leve (substitua se quiser outro)
+    cap = cv2.VideoCapture(input_path)
+    if not cap.isOpened():
+        st.error("Erro ao abrir o vídeo.")
+        return "Erro: vídeo não pôde ser aberto."
 
-# --- Função de processamento ---
-def analyze_video(video_path, output_path):
-    cap = cv2.VideoCapture(video_path)
-    total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-    fps = int(cap.get(cv2.CAP_PROP_FPS))
+    frame_count = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+    fps = cap.get(cv2.CAP_PROP_FPS)
     width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
     height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
 
-    fourcc = cv2.VideoWriter_fourcc(*"mp4v")
+    # Configura o vídeo de saída
+    fourcc = cv2.VideoWriter_fourcc(*'mp4v')
     out = cv2.VideoWriter(output_path, fourcc, fps, (width, height))
 
-    progress_bar = st.progress(0)
-    frame_placeholder = st.empty()
+    processed = 0
 
-    detections_summary = {"with_epi": 0, "without_epi": 0}
-
-    for i in range(total_frames):
+    while True:
         ret, frame = cap.read()
         if not ret:
-            break
+            break  # fim do vídeo
 
+        # Garante que o frame é válido
+        if frame is None or frame.size == 0:
+            st.warning("Frame inválido detectado, pulando...")
+            continue
+
+        # Executa a predição
         results = model(frame, verbose=False)
+
+        # Renderiza resultados
         annotated_frame = results[0].plot()
 
-        # Heurística simples: se detectar pessoa sem capacete/colete → sem EPI
-        names = results[0].names
-        for box in results[0].boxes:
-            cls = int(box.cls[0])
-            label = names[cls].lower()
-            if "person" in label:
-                detections_summary["without_epi"] += 1
-            elif any(epi in label for epi in ["helmet", "vest", "glove"]):
-                detections_summary["with_epi"] += 1
-
-        out.write(annotated_frame)
-
-        # Atualizar UI
+        # Atualiza visualização no app
         frame_rgb = cv2.cvtColor(annotated_frame, cv2.COLOR_BGR2RGB)
         frame_placeholder.image(frame_rgb, channels="RGB", use_container_width=True)
 
-        progress_bar.progress((i + 1) / total_frames)
+        # Escreve no vídeo final
+        out.write(annotated_frame)
+
+        # Atualiza progresso
+        processed += 1
+        progress = int((processed / frame_count) * 100)
+        progress_bar.progress(min(progress, 100))
 
     cap.release()
     out.release()
-    return detections_summary
 
-# --- Execução ---
+    return f"✅ Análise concluída! {processed} frames processados."
+
+# -------------------------------
+# Execução principal
+# -------------------------------
 if uploaded_file is not None:
+    # Salva o vídeo temporariamente
     with tempfile.NamedTemporaryFile(delete=False, suffix=".mp4") as tmp_input:
         tmp_input.write(uploaded_file.read())
         input_path = tmp_input.name
 
+    output_path = os.path.join(tempfile.gettempdir(), "output.mp4")
+
     st.info("🔍 Analisando vídeo, isso pode levar alguns minutos...")
 
-    output_path = os.path.join(tempfile.gettempdir(), "output_analise.mp4")
     summary = analyze_video(input_path, output_path)
 
-    # Mostrar resultado
-    st.success("✅ Análise concluída!")
-    st.video(output_path)
+    # Exibe mensagem final
+    status_placeholder.success(summary)
 
-    st.subheader("📊 Relatório de Detecção")
-    total = summary["with_epi"] + summary["without_epi"]
-    epi_percent = (summary["with_epi"] / total * 100) if total > 0 else 0
-
-    col1, col2 = st.columns(2)
-    col1.metric("Com EPI", summary["with_epi"])
-    col2.metric("Sem EPI", summary["without_epi"])
-
-    st.markdown(f"**Conformidade estimada:** {epi_percent:.1f}%")
+    # Disponibiliza download
+    with open(output_path, "rb") as f:
+        st.download_button(
+            label="⬇️ Baixar vídeo analisado",
+            data=f,
+            file_name="video_analisado.mp4",
+            mime="video/mp4"
+        )
 
 else:
-    st.info("⬆️ Envie um vídeo para iniciar a análise.")
+    st.warning("Envie um vídeo para iniciar a análise.")
