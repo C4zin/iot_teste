@@ -87,17 +87,26 @@ st.markdown("---")
 # ---------------- SIDEBAR ----------------
 st.sidebar.header("⚙️ Configurações")
 confidence = st.sidebar.slider("Nível de confiança da detecção", 0.1, 1.0, 0.35, 0.05)
+
+# Seletor de modelo YOLO
+st.sidebar.subheader("📦 Modelo de IA")
+model_choice = st.sidebar.selectbox(
+    "Escolha o modelo YOLO:",
+    options=["yolov8n.pt", "yolov8s.pt", "yolov8m.pt"],
+    index=0,
+    help="Selecione o modelo YOLOv8 a ser usado na análise. Modelos maiores são mais precisos, porém mais lentos."
+)
+
 st.sidebar.markdown("---")
 st.sidebar.info("📹 Faça upload de um vídeo para analisar o uso de EPIs.")
-
 uploaded_file = st.sidebar.file_uploader("Enviar vídeo (.mp4, .mov, .avi)", type=["mp4", "mov", "avi"])
 
 # ---------------- CARREGAR MODELO ----------------
 @st.cache_resource
-def load_model():
-    return YOLO("yolov8n.pt")
+def load_model(model_name):
+    return YOLO(model_name)
 
-model = load_model()
+model = load_model(model_choice)
 
 # ---------------- FUNÇÃO PRINCIPAL ----------------
 def analyze_video(input_path, output_path, conf):
@@ -121,8 +130,9 @@ def analyze_video(input_path, output_path, conf):
         if not ret:
             break
 
-        results = model(frame, conf=conf, verbose=False)
-        annotated = results[0].plot()
+        # Inferência refinada do YOLO
+        results = model(frame, conf=conf, iou=0.6, agnostic_nms=True, verbose=False)
+        annotated = results[0].plot(line_width=1, font_size=0.5)
 
         names = results[0].names
         frame_data = {"frame": i, "person": 0, "helmet": 0, "vest": 0, "mask": 0}
